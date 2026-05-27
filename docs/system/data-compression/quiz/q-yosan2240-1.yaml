@@ -1,0 +1,27 @@
+author: yosan2240
+date: 2026-05-27
+question: |
+  工程師在一個 backup 系統中對不同類型的 100 MB 檔案跑 zstd，得到以下實測結果（`-3` 為 zstd 預設壓縮等級，`-22` 為最高等級；等級越高，match finding 越徹底但越耗 CPU）：
+
+  | 輸入檔案 | `zstd -3`（預設等級） | `zstd -22`（最高等級） |
+  |---|---|---|
+  | application plain-text log | 28.1 MB | 24.7 MB |
+  | JPG 照片（已 baseline-encoded） | 100.4 MB | 100.4 MB |
+  | MP4 影片（H.264 + AAC） | 100.3 MB | 100.3 MB |
+  | 已 gzip 過的 log | 100.3 MB | 100.3 MB |
+
+  他嘗試再加上 `--long=27` 讓 window 變大，後三組依然壓不下來。下列哪一項**最精確**解釋了「後三組為什麼壓不下來，而且輸出反而略大於輸入」？
+options:
+  - text: "後三組檔案的 byte sequence 在統計上已接近 maximum entropy，幾乎不存在 LZ-family algorithm 可利用的重複序列；Shannon entropy 是無損壓縮的數學下界，即使提高 level 或加大 window 也無法創造出原本就不存在的 redundancy。同時 zstd 的 frame header、block header、entropy table 等 metadata 對這種 incompressible input 變成純粹的 overhead，因此輸出比輸入略大。"
+    correct: true
+    explanation: |
+      這是核心原因。JPG 內部已做過 DCT + quantization + Huffman/arithmetic coding，MP4 的 H.264 與 AAC 也都包含 entropy coding，已 gzip 的檔案則是 LZ77 + Huffman 處理過——三者的輸出 bitstream 在統計上都已逼近 source entropy（接近 random byte distribution）。Shannon source coding theorem 保證任何無損壓縮的平均 code length 不可能低於 input 的 entropy，因此 zstd 無論用 level 3 還是 level 22 都無法再縮小。zstd 偵測到無法壓縮時雖然會 fallback 到 raw block 模式（直接搬資料），但 frame magic、frame header、每個 block 的 header、checksum 仍然存在，這部分 metadata 對 incompressible 資料而言就是淨增長，所以輸出會略大於輸入。
+  - text: "zstd `-3` 的 sliding window 太小，找不到 JPG/MP4 內部的長距離 redundancy；`-22` 雖然窗口較大但仍不足，需要改用 `--long=31` 或更換成 xz/LZMA 這種有更大 dictionary 的演算法才能壓下來。"
+    explanation: |
+      這個解釋誤把問題歸因於 window 大小。zstd `-3` 預設 window 已有 1 MiB，`-22` 為 128 MiB，`--long=27` 為 128 MiB（題目實驗已涵蓋），它們對 plain-text log 都能輕鬆壓縮。後三組壓不下來與 window 無關——即使把 window 開到無限大也沒用，因為這些檔案的 byte sequence 在統計上接近 random，根本沒有「既有的 redundancy」可被任何窗口找到。換成 xz/LZMA 同樣無效，這是資料本質的限制，不是演算法強度的問題。
+  - text: "因為 JPG 與 MP4 採用的是 lossy compression，內部保留了結構性 metadata（DCT 係數表、quantization table、frame index 等），這些 metadata 與真正的 video/image payload 混雜在一起；zstd 因為無法分辨兩者，所以對這種混雜資料無法壓縮，反而會被 metadata 干擾而稍微變大。"
+    explanation: |
+      這個選項混淆了不同層次的概念。zstd 是 byte 層級的 general-purpose compressor，它不需要也不會去分辨 metadata 與 payload，只在 byte sequence 中找重複 pattern。關鍵也不在 lossy vs lossless：純 lossless 的「已 gzip 過 log」一樣壓不下來，可見這不是 lossy 或 metadata 結構引起的。真正的原因是這些檔案內部都已經做過 entropy coding，最終 bitstream 接近 maximum entropy，zstd 無 pattern 可挖。
+  - text: "zstd 預設使用靜態的 Huffman / FSE table，這些 table 是針對 ASCII 與一般文字統計分布最佳化的；對 JPG/MP4 的 binary distribution 需要先以這類檔案做 dictionary training（`zstd --train`）後再壓縮才能達到效果。"
+    explanation: |
+      zstd 的 Huffman 與 FSE table 並非靜態，而是 **per-block dynamic** —— 每個 block 都會根據該 block 實際的 symbol 統計重新建表並寫入 block header。`--train` 產生的 dictionary 是針對「許多獨立小檔案共享相似 pattern」的場景（例如大量 JSON log），它在 chunk 之間提供 shared prefix；對單一已 entropy-coded 的 binary 檔案完全無幫助，因為這類檔案內部本來就沒有 cross-chunk 的重複 pattern 可學。
