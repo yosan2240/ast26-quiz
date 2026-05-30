@@ -1,18 +1,18 @@
 author: yosan2240
 date: 2026-05-27
 question: |
-  將一張 100 MB 的 JPG 跑 zstd 壓縮後，輸出檔案約 100.3 MB，比原檔略大。已知 zstd 為 lossless compressor，且壓縮流程正常完成。下列哪一項最能解釋這個結果？
+  將一張 100 MB 的 JPG 用 zstd 做 lossless 壓縮，輸出檔案約 100.3 MB，比原檔略大，且壓縮過程正常完成。下列哪一項最能解釋這個結果？
 options:
-  - text: "JPG 已經過 entropy coding，bitstream 接近 random byte distribution，LZ-family 找不到可利用的重複序列；zstd 改以 raw block 直接搬資料，但 frame header 與 block header 仍會寫入，形成淨 overhead。"
+  - text: "JPG 內部已經壓縮過，bytes 分布接近隨機，幾乎沒有可利用的重複片段；當資料本身已接近它的 entropy 下限時，lossless 壓縮無法再縮小，而 zstd 寫入的 header 等額外資訊反而讓檔案略為變大。"
     correct: true
     explanation: |
-      JPG 的編碼包含 DCT、quantization 與 Huffman/arithmetic coding，輸出 bitstream 已逼近 source entropy。Shannon source coding theorem 保證無損壓縮的平均 code length 不可能低於 input entropy，因此 zstd 無 redundancy 可挖。它偵測到 block 無法壓縮時會 fallback 到 raw block，但 frame magic、frame header、每個 block 的 header 與 checksum 仍會寫入，這部分對 incompressible 資料是淨增長。
-  - text: "zstd 預設等級 `-3` 太低，提高到 `-22` 並加上 `--long=27`（將 sliding window 擴大到 128 MiB 以搜尋更遠的 redundancy）後即可成功壓縮。"
+      JPG 的編碼流程（DCT、quantization、Huffman/arithmetic coding）讓輸出的 bitstream 已逼近其 entropy。由 Shannon source coding theorem，lossless 壓縮的平均長度不可能低於 input entropy，所以 zstd 找不到 redundancy 可以利用。當它判定某段資料壓不動時會直接原樣搬運，但 zstd 的 frame 與 block header 仍會寫入，對這種不可壓縮的資料就是淨增長。
+  - text: "是因為壓縮 level 設太低，只要把 zstd 調到最高 level 就一定能壓下來。"
     explanation: |
-      等級控制 match finding 的徹底程度，window 決定可搜尋距離。當 input 本身沒有可被利用的 redundancy 時，提高等級或加大 window 都無法找出不存在的 pattern。
-  - text: "JPG 為 lossy 格式，zstd 因為無法分辨 lossy 結構與 random bytes 才壓不下來。"
+      level 控制的是「搜尋重複片段有多徹底」。但當 input 本身沒有可利用的重複時，再高的 level 也找不出不存在的規律，檔案大小不會改善。這是「level 越高一定越小」的常見誤解。
+  - text: "因為 JPG 是 lossy 格式，zstd 無法處理 lossy 資料才壓不下來。"
     explanation: |
-      zstd 在 byte 層級壓縮，不分辨 input 語意。同樣現象在 lossless 的「已 gzip 過的檔案」上也會發生，可見癥結在 entropy 而非 lossy。
-  - text: "需要先以 `zstd --train` 對 JPG 做 dictionary training 才能達到壓縮效果。"
+      zstd 是在 byte 層級做壓縮，不在乎資料是不是 lossy。同樣的現象在 lossless 的「已經 gzip 過的檔案」上也會發生，可見關鍵在 entropy，而不是 lossy 與否。
+  - text: "輸出比原檔大，代表這次壓縮失敗或檔案損壞了。"
     explanation: |
-      zstd 的 Huffman 與 FSE table 為 per-block dynamic，無需預先 training。`--train` 用於多個小檔案之間共享 pattern 的情境，對單一已 entropy-coded 檔案無幫助。
+      壓縮不保證一定變小。對不可壓縮的資料，一個正常完成的壓縮本來就可能讓檔案略為變大（多了 header）。題目也明講流程正常完成，所以不是失敗或損壞。
